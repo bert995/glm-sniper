@@ -196,6 +196,8 @@ function broadcastToContentScripts(message) {
     url: [
       'https://chatglm.cn/*',
       'https://open.bigmodel.cn/*',
+      'https://bigmodel.cn/*',
+      'https://*.bigmodel.cn/*',
       'https://*.zhipuai.cn/*'
     ]
   }, (tabs) => {

@@ -12,6 +12,8 @@
   "host_permissions": [
     "https://chatglm.cn/*",
     "https://open.bigmodel.cn/*",
+    "https://bigmodel.cn/*",
+    "https://*.bigmodel.cn/*",
     "https://*.zhipuai.cn/*"
   ],
   "action": {
@@ -30,6 +32,8 @@
       "matches": [
         "https://chatglm.cn/*",
         "https://open.bigmodel.cn/*",
+        "https://bigmodel.cn/*",
+        "https://*.bigmodel.cn/*",
         "https://*.zhipuai.cn/*"
       ],
       "js": ["content/sniper.js"],

@@ -1,55 +1,25 @@
 // GLM Sniper - Content Script
-// Runs on chatglm.cn / open.bigmodel.cn / zhipuai.cn
+// Targeted for bigmodel.cn/glm-coding pricing page
 
 (function () {
   'use strict';
 
   let isRunning = false;
-  let checkTimer = null;
   let config = null;
   let checksCount = 0;
 
   // ============================================================
-  // Selectors & Keywords - adapt these to the actual page structure
+  // Page-specific constants (bigmodel.cn/glm-coding)
   // ============================================================
-  const SELECTORS = {
-    // Pricing cards / plan containers
-    planCards: [
-      '[class*="price"]',
-      '[class*="plan"]',
-      '[class*="package"]',
-      '[class*="subscription"]',
-      '[class*="套餐"]',
-      '[class*="pricing"]',
-      '[class*="card"]',
-      '[class*="product"]',
-      '[class*="item"]',
-    ],
-    // Buy / subscribe buttons
-    buyButtons: [
-      'button',
-      'a[href*="buy"]',
-      'a[href*="order"]',
-      'a[href*="subscribe"]',
-      'a[href*="purchase"]',
-      '[class*="buy"]',
-      '[class*="purchase"]',
-      '[class*="subscribe"]',
-      '[class*="order"]',
-      '[role="button"]',
-    ],
-    // Sold out / unavailable indicators
-    soldOutIndicators: [
-      '[class*="sold-out"]',
-      '[class*="disabled"]',
-      '[class*="unavailable"]',
-      '[class*="out-of-stock"]',
-    ],
-  };
 
-  const TARGET_KEYWORDS = ['GLM-5.1', 'glm5.1', 'GLM5.1', 'glm-5.1', 'Coding', 'coding', '包月', '月度套餐', '月套餐'];
-  const BUY_KEYWORDS = ['购买', '订阅', '立即购买', '开通', '抢购', '立即开通', '立即订阅', 'Subscribe', 'Buy', 'Purchase'];
-  const SOLD_OUT_KEYWORDS = ['售罄', '已售完', '缺货', '暂无', '不可用', '已售罄', 'Sold out', 'Unavailable'];
+  // Sold-out text variants (the page uses 磬 not 罄)
+  const SOLD_OUT_TEXTS = ['暂时售磬', '暂时售罄', '售磬', '售罄', '已售完', '缺货'];
+
+  // Buy button text when available
+  const BUY_TEXTS = ['订阅', '立即订阅', '购买', '立即购买', '开通', '立即开通', '抢购'];
+
+  // Plan names on the page
+  const PLAN_NAMES = ['Lite', 'Pro', 'Max'];
 
   // ============================================================
   // Core scanning logic
@@ -58,140 +28,221 @@
   function scanPage() {
     checksCount++;
     updateStats();
-    log(`Scanning page... (check #${checksCount})`);
 
-    // Strategy 1: Look for elements containing target keywords
-    const allElements = document.querySelectorAll('*');
-    let targetContainer = null;
-    let bestMatch = null;
-    let bestScore = 0;
+    // Strategy: find all plan cards, check each for sold-out status
+    const plans = findPlanCards();
 
-    for (const el of allElements) {
-      if (el.children.length > 50) continue; // skip large containers
-      const text = el.innerText || el.textContent || '';
-      if (text.length > 2000) continue; // skip huge text blocks
+    if (plans.length === 0) {
+      log(`第${checksCount}次扫描: 未找到套餐卡片，确认你在 glm-coding 页面`, 'warn');
+      showOverlay('monitoring', `未找到套餐卡片 (第${checksCount}次)`);
+      return false;
+    }
 
-      let score = 0;
-      const lowerText = text.toLowerCase();
+    let foundAvailable = false;
 
-      // Check for GLM 5.1 related keywords
-      for (const kw of TARGET_KEYWORDS) {
-        if (lowerText.includes(kw.toLowerCase())) {
-          score += 10;
-        }
-      }
+    for (const plan of plans) {
+      const isSoldOut = checkSoldOut(plan.element);
+      const status = isSoldOut ? '售磬' : '可购买!';
+      log(`第${checksCount}次扫描: ${plan.name} - ${status}`, isSoldOut ? 'info' : 'success');
 
-      // Must have at least some match
-      if (score === 0) continue;
-
-      // Bonus for coding-related terms
-      if (lowerText.includes('coding') || lowerText.includes('代码')) score += 5;
-      if (lowerText.includes('包月') || lowerText.includes('月度')) score += 5;
-
-      // Check if NOT sold out
-      let isSoldOut = false;
-      for (const kw of SOLD_OUT_KEYWORDS) {
-        if (lowerText.includes(kw.toLowerCase())) {
-          isSoldOut = true;
-          break;
-        }
-      }
-
-      // Check for disabled state
-      if (el.closest('[disabled]') || el.closest('.disabled')) {
-        isSoldOut = true;
-      }
-
-      if (score > bestScore) {
-        bestScore = score;
-        bestMatch = { element: el, text: text.substring(0, 200), score, isSoldOut };
+      if (!isSoldOut) {
+        foundAvailable = true;
+        highlightElement(plan.element);
+        showOverlay('found', `发现可购买套餐: ${plan.name}!`);
+        notifyBackground({ text: `${plan.name} 套餐可购买!`, planName: plan.name });
+        return true;
       }
     }
 
-    if (bestMatch && bestScore >= 10) {
-      if (bestMatch.isSoldOut) {
-        log(`Found target but SOLD OUT: ${bestMatch.text.substring(0, 80)}`, 'warn');
-        showOverlay('monitoring', `已找到目标但暂时售罄，继续监控中... (第${checksCount}次检查)`);
-      } else {
-        log(`TARGET AVAILABLE! Score: ${bestMatch.score}, Text: ${bestMatch.text.substring(0, 80)}`, 'success');
-        showOverlay('found', '发现可购买的套餐!');
-        notifyBackground(bestMatch);
-        highlightElement(bestMatch.element);
-        return true;
-      }
-    } else {
-      log('Target not found on page, will retry...', 'info');
-      showOverlay('monitoring', `监控中... (第${checksCount}次检查)`);
+    if (!foundAvailable) {
+      const restockInfo = findRestockTime();
+      const extra = restockInfo ? ` (${restockInfo})` : '';
+      showOverlay('monitoring', `全部售磬${extra} - 第${checksCount}次扫描`);
     }
 
     return false;
   }
 
-  function findBuyButton(container) {
-    // Look for buy button near the target container
-    const searchArea = container || document;
+  function findPlanCards() {
+    const plans = [];
 
-    for (const selector of SELECTORS.buyButtons) {
-      const buttons = searchArea.querySelectorAll(selector);
-      for (const btn of buttons) {
-        const btnText = (btn.innerText || btn.textContent || '').trim();
-        for (const kw of BUY_KEYWORDS) {
-          if (btnText.includes(kw)) {
-            if (!btn.disabled && !btn.classList.contains('disabled')) {
-              return btn;
+    // Method 1: Find elements that contain plan names (Lite/Pro/Max)
+    // Look for heading-like elements with these names
+    for (const name of PLAN_NAMES) {
+      // Try various selectors for plan name headings
+      const candidates = document.querySelectorAll('h1, h2, h3, h4, [class*="title"], [class*="name"], [class*="plan"], [class*="card"] > div:first-child');
+      for (const el of candidates) {
+        const text = (el.textContent || '').trim();
+        if (text === name || text.startsWith(name)) {
+          // Find the parent card container
+          const card = findCardContainer(el);
+          if (card && !plans.some(p => p.element === card)) {
+            plans.push({ name, element: card, heading: el });
+          }
+        }
+      }
+    }
+
+    // Method 2: If method 1 found nothing, try broader search
+    if (plans.length === 0) {
+      const allElements = document.querySelectorAll('*');
+      for (const el of allElements) {
+        const text = (el.textContent || '').trim();
+        if (text.length > 5 && text.length < 500) {
+          for (const name of PLAN_NAMES) {
+            if (text.includes(name) && text.includes('¥') && text.includes('/月')) {
+              const card = findCardContainer(el);
+              if (card && !plans.some(p => p.element === card)) {
+                plans.push({ name, element: card, heading: el });
+              }
             }
           }
         }
       }
     }
 
-    // Expand search to parent containers
-    if (container && container.parentElement) {
-      return findBuyButton(container.parentElement);
+    log(`找到 ${plans.length} 个套餐卡片: ${plans.map(p => p.name).join(', ')}`, 'info');
+    return plans;
+  }
+
+  function findCardContainer(el) {
+    // Walk up the DOM to find a reasonable card container
+    let node = el;
+    for (let i = 0; i < 10; i++) {
+      if (!node.parentElement) break;
+      node = node.parentElement;
+
+      // Check if this looks like a card container
+      const style = window.getComputedStyle(node);
+      const cls = node.className || '';
+
+      // Heuristics for card container
+      const isCard =
+        cls.match(/card|plan|package|item|pricing/i) ||
+        (style.borderRadius && parseInt(style.borderRadius) > 4) ||
+        (style.boxShadow && style.boxShadow !== 'none') ||
+        (node.children.length >= 2 && node.children.length <= 20);
+
+      // Don't go too high (stop at main content area)
+      const tooHigh =
+        cls.match(/container|main|content|wrapper|page|body|app/i) ||
+        node.children.length > 20;
+
+      if (tooHigh && i > 2) return node.children.length <= 20 ? node : el.parentElement;
+      if (isCard && i >= 1) return node;
+    }
+    return el.parentElement || el;
+  }
+
+  function checkSoldOut(cardElement) {
+    const text = (cardElement.textContent || '').trim();
+
+    // Check text content for sold-out keywords
+    for (const kw of SOLD_OUT_TEXTS) {
+      if (text.includes(kw)) return true;
+    }
+
+    // Check for disabled buttons
+    const buttons = cardElement.querySelectorAll('button, [role="button"], a');
+    for (const btn of buttons) {
+      if (btn.disabled || btn.classList.contains('disabled') || btn.hasAttribute('disabled')) {
+        const btnText = (btn.textContent || '').trim();
+        if (BUY_TEXTS.some(t => btnText.includes(t))) return true;
+      }
+    }
+
+    return false;
+  }
+
+  function findRestockTime() {
+    // Look for restock time info like "04月17日 10:00 补货"
+    const match = document.body.textContent.match(/(\d{1,2}月\d{1,2}日\s*\d{1,2}:\d{2})\s*补货/);
+    return match ? `${match[1]} 补货` : null;
+  }
+
+  function findBuyButton(cardElement) {
+    // Look in the card for a clickable buy button
+    const selectors = ['button', '[role="button"]', 'a'];
+
+    for (const sel of selectors) {
+      const buttons = cardElement.querySelectorAll(sel);
+      for (const btn of buttons) {
+        const btnText = (btn.textContent || '').trim();
+        // Must contain a buy-related keyword
+        if (BUY_TEXTS.some(t => btnText.includes(t))) {
+          // Must NOT be disabled or sold out
+          if (!btn.disabled && !btn.classList.contains('disabled') && !SOLD_OUT_TEXTS.some(t => btnText.includes(t))) {
+            return btn;
+          }
+        }
+      }
+    }
+
+    // Fallback: any non-disabled button in the card
+    const allBtns = cardElement.querySelectorAll('button:not([disabled]), [role="button"]:not(.disabled)');
+    for (const btn of allBtns) {
+      const btnText = (btn.textContent || '').trim();
+      if (!SOLD_OUT_TEXTS.some(t => btnText.includes(t)) && btnText.length < 20 && btnText.length > 0) {
+        return btn;
+      }
     }
 
     return null;
   }
 
-  function attemptPurchase(targetElement) {
-    log('Attempting auto-purchase...', 'info');
+  function attemptPurchase(cardElement) {
+    log('尝试自动点击购买按钮...', 'info');
 
-    const buyBtn = findBuyButton(targetElement);
+    const buyBtn = findBuyButton(cardElement);
     if (buyBtn) {
-      log(`Found buy button: "${buyBtn.innerText.trim()}"`, 'success');
+      log(`找到购买按钮: "${buyBtn.textContent.trim()}"`, 'success');
 
-      // Simulate human-like click
       buyBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
       setTimeout(() => {
-        // Dispatch mouse events in sequence
-        const events = ['mouseenter', 'mouseover', 'mousedown', 'mouseup', 'click'];
-        for (const eventType of events) {
-          const event = new MouseEvent(eventType, {
-            bubbles: true,
-            cancelable: true,
-            view: window,
-          });
-          buyBtn.dispatchEvent(event);
-        }
+        // Simulate realistic mouse event sequence
+        const rect = buyBtn.getBoundingClientRect();
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
 
-        log('Buy button clicked!', 'success');
+        const eventOptions = {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX: x,
+          clientY: y,
+        };
+
+        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(type => {
+          buyBtn.dispatchEvent(new PointerEvent(type, eventOptions));
+        });
+
+        log('已点击购买按钮!', 'success');
         showOverlay('success', '已点击购买按钮! 请确认支付!');
 
         chrome.runtime.sendMessage({
           type: 'PURCHASE_ATTEMPTED',
-          data: { success: true, buttonText: buyBtn.innerText.trim() },
+          data: { success: true, buttonText: buyBtn.textContent.trim() },
         });
-      }, 300);
+      }, 200);
     } else {
-      log('Could not find buy button', 'error');
-      showOverlay('error', '找到套餐但未找到购买按钮，请手动操作!');
+      log('未找到可点击的购买按钮，请手动操作!', 'error');
+      showOverlay('error', '找到可购买套餐但按钮定位失败，请手动点击!');
 
       chrome.runtime.sendMessage({
         type: 'PURCHASE_ATTEMPTED',
         data: { success: false, reason: 'button_not_found' },
       });
     }
+  }
+
+  // ============================================================
+  // Auto-refresh page strategy
+  // ============================================================
+
+  function refreshPage() {
+    // For 10:00 restock: hard refresh to get fresh page state
+    window.location.reload();
   }
 
   // ============================================================
@@ -221,18 +272,20 @@
       z-index: 2147483647;
       background: ${colors[status] || colors.monitoring};
       color: white;
-      padding: 10px 16px;
+      padding: 12px 18px;
       border-radius: 8px;
-      font-size: 13px;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+      font-weight: 500;
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
       box-shadow: 0 4px 12px rgba(0,0,0,0.3);
       cursor: pointer;
-      transition: opacity 0.3s;
-      max-width: 350px;
-      line-height: 1.4;
+      max-width: 400px;
+      line-height: 1.5;
     `;
-    overlayEl.textContent = `🎯 GLM Sniper: ${text}`;
-    overlayEl.onclick = () => { overlayEl.style.opacity = overlayEl.style.opacity === '0.2' ? '1' : '0.2'; };
+    overlayEl.textContent = `🎯 ${text}`;
+    overlayEl.onclick = () => {
+      overlayEl.style.opacity = overlayEl.style.opacity === '0.2' ? '1' : '0.2';
+    };
   }
 
   function removeOverlay() {
@@ -244,8 +297,9 @@
 
   function highlightElement(el) {
     if (!el) return;
-    el.style.outline = '3px solid #f59e0b';
-    el.style.outlineOffset = '2px';
+    el.style.outline = '3px solid #22c55e';
+    el.style.outlineOffset = '4px';
+    el.style.transition = 'outline 0.3s';
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
@@ -253,39 +307,32 @@
   // Communication
   // ============================================================
 
-  function notifyBackground(match) {
+  function notifyBackground(data) {
     chrome.runtime.sendMessage({
       type: 'TARGET_FOUND',
-      data: {
-        text: match.text,
-        score: match.score,
-        url: window.location.href,
-      },
+      data: { ...data, url: window.location.href },
     });
   }
 
   function log(text, level = 'info') {
-    const prefix = {
-      info: '📋',
-      warn: '⚠️',
-      error: '❌',
-      success: '✅',
-    };
+    const prefix = { info: '📋', warn: '⚠️', error: '❌', success: '✅' };
     console.log(`${prefix[level] || '📋'} [GLM Sniper] ${text}`);
     chrome.runtime.sendMessage({ type: 'LOG', text, level }).catch(() => {});
   }
 
   async function updateStats() {
-    const stats = await chrome.runtime.sendMessage({ type: 'GET_STATS' });
-    if (stats) {
-      stats.checksCount = checksCount;
-      stats.lastCheck = Date.now();
-      await chrome.storage.local.set({ sniperStats: stats });
-    }
+    try {
+      const stats = await chrome.runtime.sendMessage({ type: 'GET_STATS' });
+      if (stats) {
+        stats.checksCount = checksCount;
+        stats.lastCheck = Date.now();
+        await chrome.storage.local.set({ sniperStats: stats });
+      }
+    } catch {}
   }
 
   // ============================================================
-  // Message handlers
+  // Message handlers from background
   // ============================================================
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -293,24 +340,23 @@
       case 'CHECK_NOW':
         if (!isRunning) {
           isRunning = true;
-          showOverlay('monitoring', '启动中...');
+          showOverlay('monitoring', '启动监控...');
         }
-        scanPage();
-        sendResponse({ ok: true });
+        const found = scanPage();
+        // If not found and using page-refresh strategy, reload
+        if (!found && config && config.refreshPage) {
+          setTimeout(refreshPage, (config.refreshInterval || 3) * 1000);
+        }
+        sendResponse({ ok: true, found });
         break;
 
       case 'AUTO_BUY':
-        // Find the target again and attempt purchase
-        const result = scanPage();
-        if (result) {
-          // Target was found, attempt purchase
-          const allElements = document.querySelectorAll('*');
-          for (const el of allElements) {
-            const text = (el.innerText || '').toLowerCase();
-            if (TARGET_KEYWORDS.some(kw => text.includes(kw.toLowerCase())) && text.length < 2000) {
-              attemptPurchase(el);
-              break;
-            }
+        // Re-scan and attempt purchase on any available plan
+        const plans = findPlanCards();
+        for (const plan of plans) {
+          if (!checkSoldOut(plan.element)) {
+            attemptPurchase(plan.element);
+            break;
           }
         }
         sendResponse({ ok: true });
@@ -319,10 +365,6 @@
       case 'STOP':
         isRunning = false;
         checksCount = 0;
-        if (checkTimer) {
-          clearInterval(checkTimer);
-          checkTimer = null;
-        }
         removeOverlay();
         sendResponse({ ok: true });
         break;
@@ -334,35 +376,36 @@
   });
 
   // ============================================================
-  // Auto-start check on page load (if enabled)
+  // MutationObserver - detect dynamic page changes (SPA)
+  // ============================================================
+
+  let lastScanTime = 0;
+
+  const observer = new MutationObserver(() => {
+    if (!isRunning || !config?.enabled) return;
+    const now = Date.now();
+    if (now - lastScanTime > 2000) {
+      lastScanTime = now;
+      scanPage();
+    }
+  });
+
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  // ============================================================
+  // Auto-start if previously enabled
   // ============================================================
 
   async function init() {
     const result = await chrome.storage.local.get('sniperConfig');
     config = result.sniperConfig;
-    if (config && config.enabled) {
+    if (config?.enabled) {
       isRunning = true;
-      log('Auto-started (was previously enabled)', 'info');
-      showOverlay('monitoring', '自动启动监控...');
+      log('自动恢复监控 (上次开启状态)', 'info');
+      showOverlay('monitoring', '自动恢复监控...');
       scanPage();
     }
   }
-
-  // Also watch for dynamic page changes (SPA navigation)
-  const observer = new MutationObserver(() => {
-    if (isRunning && config && config.enabled) {
-      // Debounce: only scan if last scan was > 1 second ago
-      if (!observer._lastScan || Date.now() - observer._lastScan > 1000) {
-        observer._lastScan = Date.now();
-        scanPage();
-      }
-    }
-  });
-
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true,
-  });
 
   init();
 })();
