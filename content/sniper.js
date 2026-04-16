@@ -7,19 +7,121 @@
   let isRunning = false;
   let config = null;
   let checksCount = 0;
+  let countdownTimer = null;
+  let rapidFireTimer = null;
 
   // ============================================================
   // Page-specific constants (bigmodel.cn/glm-coding)
   // ============================================================
 
-  // Sold-out text variants (the page uses 磬 not 罄)
   const SOLD_OUT_TEXTS = ['暂时售磬', '暂时售罄', '售磬', '售罄', '已售完', '缺货'];
-
-  // Buy button text when available
   const BUY_TEXTS = ['订阅', '立即订阅', '购买', '立即购买', '开通', '立即开通', '抢购'];
 
-  // Plan names on the page
-  const PLAN_NAMES = ['Lite', 'Pro', 'Max'];
+  // Only target Lite and Pro (user confirmed)
+  const TARGET_PLANS = ['Lite', 'Pro'];
+  // All plan names for detection
+  const ALL_PLAN_NAMES = ['Lite', 'Pro', 'Max'];
+
+  // ============================================================
+  // Restock countdown & rapid-fire refresh
+  // ============================================================
+
+  function parseRestockTime() {
+    // Match "04月17日 10:00 补货" pattern
+    const text = document.body.textContent || '';
+    const match = text.match(/(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})\s*补货/);
+    if (!match) return null;
+
+    const now = new Date();
+    const month = parseInt(match[1]) - 1; // 0-indexed
+    const day = parseInt(match[2]);
+    const hour = parseInt(match[3]);
+    const minute = parseInt(match[4]);
+
+    const restock = new Date(now.getFullYear(), month, day, hour, minute, 0, 0);
+    // Handle year rollover
+    if (restock < now && (now - restock) > 86400000 * 30) {
+      restock.setFullYear(restock.getFullYear() + 1);
+    }
+    return restock;
+  }
+
+  function startCountdown() {
+    if (countdownTimer) return;
+
+    const restockTime = parseRestockTime();
+    if (!restockTime) return;
+
+    log(`检测到补货时间: ${restockTime.toLocaleString('zh-CN')}`, 'info');
+
+    countdownTimer = setInterval(() => {
+      const now = Date.now();
+      const diff = restockTime.getTime() - now;
+
+      if (diff <= 0) {
+        // Restock time reached! Enter rapid-fire mode
+        clearInterval(countdownTimer);
+        countdownTimer = null;
+        enterRapidFire();
+        return;
+      }
+
+      const sec = Math.floor(diff / 1000);
+      const min = Math.floor(sec / 60);
+      const hrs = Math.floor(min / 60);
+
+      // Show countdown
+      if (sec <= 120) {
+        showOverlay('found', `距补货还有 ${sec}秒 - 准备就绪!`);
+      } else if (min <= 60) {
+        showOverlay('monitoring', `距补货还有 ${min}分${sec % 60}秒 (第${checksCount}次扫描)`);
+      } else {
+        showOverlay('monitoring', `距补货还有 ${hrs}时${min % 60}分 (第${checksCount}次扫描)`);
+      }
+
+      // 30 seconds before restock: start rapid scanning (every 1s)
+      if (diff <= 30000 && !rapidFireTimer) {
+        log('距补货不到30秒，进入快速扫描模式!', 'success');
+        enterRapidFire();
+      }
+
+      // 5 seconds before restock: hard refresh to get freshest page state
+      if (diff <= 5000 && diff > 4000) {
+        log('距补货5秒，刷新页面获取最新状态!', 'info');
+        window.location.reload();
+      }
+    }, 1000);
+  }
+
+  function enterRapidFire() {
+    if (rapidFireTimer) return;
+    log('进入极速扫描模式 - 每500ms扫描一次', 'success');
+
+    rapidFireTimer = setInterval(() => {
+      const found = scanPage();
+      if (found) {
+        clearInterval(rapidFireTimer);
+        rapidFireTimer = null;
+      }
+    }, 500);
+
+    // Also do hard refresh every 3 seconds if nothing found
+    let refreshCount = 0;
+    const refreshInterval = setInterval(() => {
+      refreshCount++;
+      if (refreshCount > 20 || !isRunning) {
+        clearInterval(refreshInterval);
+        return;
+      }
+      // Only refresh if still not found after scanning
+      const plans = findPlanCards();
+      const anyAvailable = plans.some(p => TARGET_PLANS.includes(p.name) && !checkSoldOut(p.element));
+      if (!anyAvailable) {
+        log(`极速模式: 第${refreshCount}次刷新页面`, 'info');
+        window.location.reload();
+      }
+    }, 3000);
+  }
 
   // ============================================================
   // Core scanning logic
@@ -29,35 +131,40 @@
     checksCount++;
     updateStats();
 
-    // Strategy: find all plan cards, check each for sold-out status
     const plans = findPlanCards();
 
     if (plans.length === 0) {
-      log(`第${checksCount}次扫描: 未找到套餐卡片，确认你在 glm-coding 页面`, 'warn');
+      log(`第${checksCount}次扫描: 未找到套餐卡片，确认在 glm-coding 页面`, 'warn');
       showOverlay('monitoring', `未找到套餐卡片 (第${checksCount}次)`);
       return false;
     }
 
-    let foundAvailable = false;
+    // Only check Lite and Pro
+    const targetPlans = plans.filter(p => TARGET_PLANS.includes(p.name));
 
-    for (const plan of plans) {
+    for (const plan of targetPlans) {
       const isSoldOut = checkSoldOut(plan.element);
       const status = isSoldOut ? '售磬' : '可购买!';
-      log(`第${checksCount}次扫描: ${plan.name} - ${status}`, isSoldOut ? 'info' : 'success');
+      log(`第${checksCount}次: ${plan.name} - ${status}`, isSoldOut ? 'info' : 'success');
 
       if (!isSoldOut) {
-        foundAvailable = true;
         highlightElement(plan.element);
-        showOverlay('found', `发现可购买套餐: ${plan.name}!`);
+        showOverlay('found', `发现可购买套餐: ${plan.name}! 🔥`);
         notifyBackground({ text: `${plan.name} 套餐可购买!`, planName: plan.name });
         return true;
       }
     }
 
-    if (!foundAvailable) {
-      const restockInfo = findRestockTime();
-      const extra = restockInfo ? ` (${restockInfo})` : '';
-      showOverlay('monitoring', `全部售磬${extra} - 第${checksCount}次扫描`);
+    // All sold out - start countdown if not already
+    if (isRunning && !countdownTimer) {
+      startCountdown();
+    }
+
+    const restockInfo = findRestockTime();
+    const extra = restockInfo ? ` (${restockInfo})` : '';
+    // Don't override countdown overlay
+    if (!countdownTimer) {
+      showOverlay('monitoring', `Lite & Pro 售磬${extra} - 第${checksCount}次`);
     }
 
     return false;
@@ -66,15 +173,12 @@
   function findPlanCards() {
     const plans = [];
 
-    // Method 1: Find elements that contain plan names (Lite/Pro/Max)
-    // Look for heading-like elements with these names
-    for (const name of PLAN_NAMES) {
-      // Try various selectors for plan name headings
-      const candidates = document.querySelectorAll('h1, h2, h3, h4, [class*="title"], [class*="name"], [class*="plan"], [class*="card"] > div:first-child');
+    for (const name of ALL_PLAN_NAMES) {
+      const candidates = document.querySelectorAll('h1, h2, h3, h4, [class*="title"], [class*="name"], [class*="plan"], [class*="card"] > div:first-child, span, p, div');
       for (const el of candidates) {
         const text = (el.textContent || '').trim();
-        if (text === name || text.startsWith(name)) {
-          // Find the parent card container
+        // Match exact plan name or plan name at start, but not long strings
+        if ((text === name || (text.startsWith(name) && text.length < 30)) && text.length <= 30) {
           const card = findCardContainer(el);
           if (card && !plans.some(p => p.element === card)) {
             plans.push({ name, element: card, heading: el });
@@ -83,13 +187,13 @@
       }
     }
 
-    // Method 2: If method 1 found nothing, try broader search
+    // Fallback: broader search
     if (plans.length === 0) {
       const allElements = document.querySelectorAll('*');
       for (const el of allElements) {
         const text = (el.textContent || '').trim();
         if (text.length > 5 && text.length < 500) {
-          for (const name of PLAN_NAMES) {
+          for (const name of ALL_PLAN_NAMES) {
             if (text.includes(name) && text.includes('¥') && text.includes('/月')) {
               const card = findCardContainer(el);
               if (card && !plans.some(p => p.element === card)) {
@@ -101,31 +205,26 @@
       }
     }
 
-    log(`找到 ${plans.length} 个套餐卡片: ${plans.map(p => p.name).join(', ')}`, 'info');
     return plans;
   }
 
   function findCardContainer(el) {
-    // Walk up the DOM to find a reasonable card container
     let node = el;
     for (let i = 0; i < 10; i++) {
       if (!node.parentElement) break;
       node = node.parentElement;
 
-      // Check if this looks like a card container
       const style = window.getComputedStyle(node);
-      const cls = node.className || '';
+      const cls = (typeof node.className === 'string' ? node.className : '') || '';
 
-      // Heuristics for card container
       const isCard =
         cls.match(/card|plan|package|item|pricing/i) ||
         (style.borderRadius && parseInt(style.borderRadius) > 4) ||
         (style.boxShadow && style.boxShadow !== 'none') ||
         (node.children.length >= 2 && node.children.length <= 20);
 
-      // Don't go too high (stop at main content area)
       const tooHigh =
-        cls.match(/container|main|content|wrapper|page|body|app/i) ||
+        cls.match(/container|main|content|wrapper|page|body|app|layout|root/i) ||
         node.children.length > 20;
 
       if (tooHigh && i > 2) return node.children.length <= 20 ? node : el.parentElement;
@@ -137,12 +236,11 @@
   function checkSoldOut(cardElement) {
     const text = (cardElement.textContent || '').trim();
 
-    // Check text content for sold-out keywords
     for (const kw of SOLD_OUT_TEXTS) {
       if (text.includes(kw)) return true;
     }
 
-    // Check for disabled buttons
+    // Check for disabled buttons within the card
     const buttons = cardElement.querySelectorAll('button, [role="button"], a');
     for (const btn of buttons) {
       if (btn.disabled || btn.classList.contains('disabled') || btn.hasAttribute('disabled')) {
@@ -151,26 +249,37 @@
       }
     }
 
+    // If there's NO buy button at all, it might be sold out (button replaced with text)
+    let hasBuyButton = false;
+    for (const btn of buttons) {
+      const btnText = (btn.textContent || '').trim();
+      if (BUY_TEXTS.some(t => btnText.includes(t)) && !btn.disabled) {
+        hasBuyButton = true;
+      }
+    }
+
+    // If the card has pricing info but no active buy button and no sold-out text,
+    // it's ambiguous - treat as sold out to be safe
+    if (!hasBuyButton && text.includes('¥') && buttons.length === 0) {
+      return true;
+    }
+
     return false;
   }
 
   function findRestockTime() {
-    // Look for restock time info like "04月17日 10:00 补货"
     const match = document.body.textContent.match(/(\d{1,2}月\d{1,2}日\s*\d{1,2}:\d{2})\s*补货/);
     return match ? `${match[1]} 补货` : null;
   }
 
   function findBuyButton(cardElement) {
-    // Look in the card for a clickable buy button
     const selectors = ['button', '[role="button"]', 'a'];
 
     for (const sel of selectors) {
       const buttons = cardElement.querySelectorAll(sel);
       for (const btn of buttons) {
         const btnText = (btn.textContent || '').trim();
-        // Must contain a buy-related keyword
         if (BUY_TEXTS.some(t => btnText.includes(t))) {
-          // Must NOT be disabled or sold out
           if (!btn.disabled && !btn.classList.contains('disabled') && !SOLD_OUT_TEXTS.some(t => btnText.includes(t))) {
             return btn;
           }
@@ -178,11 +287,11 @@
       }
     }
 
-    // Fallback: any non-disabled button in the card
+    // Fallback: any non-disabled button that's not sold-out
     const allBtns = cardElement.querySelectorAll('button:not([disabled]), [role="button"]:not(.disabled)');
     for (const btn of allBtns) {
       const btnText = (btn.textContent || '').trim();
-      if (!SOLD_OUT_TEXTS.some(t => btnText.includes(t)) && btnText.length < 20 && btnText.length > 0) {
+      if (!SOLD_OUT_TEXTS.some(t => btnText.includes(t)) && btnText.length > 0 && btnText.length < 20) {
         return btn;
       }
     }
@@ -190,59 +299,48 @@
     return null;
   }
 
-  function attemptPurchase(cardElement) {
-    log('尝试自动点击购买按钮...', 'info');
+  function attemptPurchase(cardElement, planName) {
+    log(`尝试自动购买 ${planName}...`, 'info');
 
     const buyBtn = findBuyButton(cardElement);
     if (buyBtn) {
       log(`找到购买按钮: "${buyBtn.textContent.trim()}"`, 'success');
 
-      buyBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      buyBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
 
-      setTimeout(() => {
-        // Simulate realistic mouse event sequence
-        const rect = buyBtn.getBoundingClientRect();
-        const x = rect.left + rect.width / 2;
-        const y = rect.top + rect.height / 2;
+      // No delay - click immediately for speed
+      const rect = buyBtn.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
 
-        const eventOptions = {
-          bubbles: true,
-          cancelable: true,
-          view: window,
-          clientX: x,
-          clientY: y,
-        };
+      const eventOptions = {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: x,
+        clientY: y,
+      };
 
-        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(type => {
-          buyBtn.dispatchEvent(new PointerEvent(type, eventOptions));
-        });
+      ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(type => {
+        buyBtn.dispatchEvent(new PointerEvent(type, eventOptions));
+      });
 
-        log('已点击购买按钮!', 'success');
-        showOverlay('success', '已点击购买按钮! 请确认支付!');
-
-        chrome.runtime.sendMessage({
-          type: 'PURCHASE_ATTEMPTED',
-          data: { success: true, buttonText: buyBtn.textContent.trim() },
-        });
-      }, 200);
-    } else {
-      log('未找到可点击的购买按钮，请手动操作!', 'error');
-      showOverlay('error', '找到可购买套餐但按钮定位失败，请手动点击!');
+      log(`已点击 ${planName} 购买按钮!`, 'success');
+      showOverlay('success', `已点击 ${planName} 购买按钮! 请确认支付!`);
 
       chrome.runtime.sendMessage({
         type: 'PURCHASE_ATTEMPTED',
-        data: { success: false, reason: 'button_not_found' },
+        data: { success: true, buttonText: buyBtn.textContent.trim(), planName },
+      });
+    } else {
+      log(`未找到 ${planName} 的购买按钮，请手动操作!`, 'error');
+      showOverlay('error', `找到 ${planName} 可购买但按钮定位失败，请手动点击!`);
+
+      chrome.runtime.sendMessage({
+        type: 'PURCHASE_ATTEMPTED',
+        data: { success: false, reason: 'button_not_found', planName },
       });
     }
-  }
-
-  // ============================================================
-  // Auto-refresh page strategy
-  // ============================================================
-
-  function refreshPage() {
-    // For 10:00 restock: hard refresh to get fresh page state
-    window.location.reload();
   }
 
   // ============================================================
@@ -279,7 +377,7 @@
       font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
       box-shadow: 0 4px 12px rgba(0,0,0,0.3);
       cursor: pointer;
-      max-width: 400px;
+      max-width: 420px;
       line-height: 1.5;
     `;
     overlayEl.textContent = `🎯 ${text}`;
@@ -299,8 +397,7 @@
     if (!el) return;
     el.style.outline = '3px solid #22c55e';
     el.style.outlineOffset = '4px';
-    el.style.transition = 'outline 0.3s';
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.scrollIntoView({ behavior: 'instant', block: 'center' });
   }
 
   // ============================================================
@@ -332,7 +429,7 @@
   }
 
   // ============================================================
-  // Message handlers from background
+  // Message handlers
   // ============================================================
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -342,20 +439,16 @@
           isRunning = true;
           showOverlay('monitoring', '启动监控...');
         }
-        const found = scanPage();
-        // If not found and using page-refresh strategy, reload
-        if (!found && config && config.refreshPage) {
-          setTimeout(refreshPage, (config.refreshInterval || 3) * 1000);
-        }
-        sendResponse({ ok: true, found });
+        scanPage();
+        sendResponse({ ok: true });
         break;
 
       case 'AUTO_BUY':
-        // Re-scan and attempt purchase on any available plan
-        const plans = findPlanCards();
+        // Find first available Lite or Pro and buy
+        const plans = findPlanCards().filter(p => TARGET_PLANS.includes(p.name));
         for (const plan of plans) {
           if (!checkSoldOut(plan.element)) {
-            attemptPurchase(plan.element);
+            attemptPurchase(plan.element, plan.name);
             break;
           }
         }
@@ -365,6 +458,8 @@
       case 'STOP':
         isRunning = false;
         checksCount = 0;
+        if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+        if (rapidFireTimer) { clearInterval(rapidFireTimer); rapidFireTimer = null; }
         removeOverlay();
         sendResponse({ ok: true });
         break;
@@ -376,7 +471,7 @@
   });
 
   // ============================================================
-  // MutationObserver - detect dynamic page changes (SPA)
+  // MutationObserver for SPA changes
   // ============================================================
 
   let lastScanTime = 0;
@@ -390,10 +485,12 @@
     }
   });
 
-  observer.observe(document.body, { childList: true, subtree: true });
+  if (document.body) {
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
 
   // ============================================================
-  // Auto-start if previously enabled
+  // Init
   // ============================================================
 
   async function init() {
