@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "GLM Sniper - 智谱包月套餐抢购助手",
+  "version": "1.0.0",
+  "description": "自动监控并抢购智谱GLM5.1 Coding包月套餐",
+  "permissions": [
+    "storage",
+    "alarms",
+    "notifications",
+    "offscreen"
+  ],
+  "host_permissions": [
+    "https://chatglm.cn/*",
+    "https://open.bigmodel.cn/*",
+    "https://*.zhipuai.cn/*"
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatglm.cn/*",
+        "https://open.bigmodel.cn/*",
+        "https://*.zhipuai.cn/*"
+      ],
+      "js": ["content/sniper.js"],
+      "css": ["content/sniper.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

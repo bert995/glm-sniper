@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GLM Sniper</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🎯 GLM Sniper</h1>
+      <p class="subtitle">智谱 GLM5.1 Coding 包月套餐抢购助手</p>
+    </header>
+
+    <!-- Status -->
+    <div id="status-card" class="card status-idle">
+      <div class="status-indicator"></div>
+      <div class="status-text">
+        <span id="status-label">未启动</span>
+        <span id="status-detail"></span>
+      </div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="actions">
+      <button id="btn-start" class="btn btn-primary">开始抢购</button>
+      <button id="btn-stop" class="btn btn-danger" disabled>停止</button>
+    </div>
+
+    <!-- Stats -->
+    <div id="stats-section" class="card" style="display:none;">
+      <h3>运行状态</h3>
+      <div class="stats-grid">
+        <div class="stat">
+          <span class="stat-value" id="stat-checks">0</span>
+          <span class="stat-label">检查次数</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value" id="stat-elapsed">0s</span>
+          <span class="stat-label">运行时间</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value" id="stat-found">-</span>
+          <span class="stat-label">发现目标</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Config -->
+    <div class="card">
+      <h3>配置</h3>
+
+      <div class="form-group">
+        <label>检查间隔 (秒)</label>
+        <input type="number" id="cfg-interval" min="1" max="60" value="3">
+      </div>
+
+      <div class="form-group">
+        <label>目标关键词 (逗号分隔)</label>
+        <input type="text" id="cfg-keywords" placeholder="GLM-5.1, Coding, 包月">
+      </div>
+
+      <div class="form-group">
+        <label class="toggle-label">
+          <input type="checkbox" id="cfg-autobuy">
+          <span>自动点击购买按钮</span>
+        </label>
+      </div>
+
+      <div class="form-group">
+        <label class="toggle-label">
+          <input type="checkbox" id="cfg-randomdelay" checked>
+          <span>随机延迟 (防检测)</span>
+        </label>
+      </div>
+
+      <div class="form-group">
+        <label class="toggle-label">
+          <input type="checkbox" id="cfg-notify" checked>
+          <span>桌面通知</span>
+        </label>
+      </div>
+
+      <div class="form-group">
+        <label class="toggle-label">
+          <input type="checkbox" id="cfg-sound" checked>
+          <span>提示音</span>
+        </label>
+      </div>
+
+      <button id="btn-save" class="btn btn-secondary">保存配置</button>
+    </div>
+
+    <!-- Instructions -->
+    <div class="card">
+      <h3>使用说明</h3>
+      <ol class="instructions">
+        <li>打开智谱的套餐购买页面 (chatglm.cn 或 open.bigmodel.cn)</li>
+        <li>确保在套餐/定价页面上</li>
+        <li>点击「开始抢购」按钮</li>
+        <li>插件会自动刷新并检测 GLM5.1 Coding 包月套餐</li>
+        <li>发现可购买时会弹出通知</li>
+        <li>开启「自动点击购买」可自动点击购买按钮</li>
+      </ol>
+    </div>
+
+    <!-- Logs -->
+    <div class="card">
+      <h3>
+        日志
+        <button id="btn-clear-logs" class="btn-text">清空</button>
+      </h3>
+      <div id="logs" class="logs"></div>
+    </div>
+
+    <footer>
+      <p>v1.0.0 | 仅供个人使用</p>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
